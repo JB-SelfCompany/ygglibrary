@@ -74,15 +74,14 @@ const components = {
     QKnob,
 };
 
-//directives 
-import Ripple from 'quasar/src/directives/Ripple';
-import ClosePopup from 'quasar/src/directives/ClosePopup';
+//directives
+import { Ripple, ClosePopup } from 'quasar';
 
 const directives = {Ripple, ClosePopup};
 
 //plugins
 //import AppFullscreen from 'quasar/src/plugins/AppFullscreen';
-import Notify from 'quasar/src/plugins/Notify';
+import { Notify } from 'quasar';
 
 const plugins = {
     //AppFullscreen,

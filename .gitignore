@@ -1,4 +1,4 @@
 /node_modules
-/server/.inpx-web*
+/server/.ygglibrary*
 /dist
 dev*.sh

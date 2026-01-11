@@ -55,7 +55,8 @@ module.exports = {
     */
 
     server: {
-        host: '0.0.0.0',
+        host: '0.0.0.0', // deprecated, use hosts array instead
+        hosts: [], // array of hosts to bind, e.g. ['192.168.1.23', '192.168.1.24']. If empty, uses 'host' value
         port: '22380',
         root: '',
     },
@@ -67,8 +68,8 @@ module.exports = {
         root: '/opds',
     },
 
-    latestReleaseLink: 'https://github.com/bookpauk/inpx-web/releases/latest',
-    checkReleaseLink: 'https://api.github.com/repos/bookpauk/inpx-web/releases/latest',
+    latestReleaseLink: 'https://github.com/JB-SelfCompany/ygglibrary/releases/latest',
+    checkReleaseLink: 'https://api.github.com/repos/JB-SelfCompany/ygglibrary/releases/latest',
 
     uiDefaults: {
         limit: 20,

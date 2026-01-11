@@ -1,6 +1,6 @@
 const fs = require('fs-extra');
 const path = require('path');
-const { execSync } = require('child_process');
+const yazl = require('yazl');
 
 const showdown = require('showdown');
 
@@ -30,7 +30,37 @@ async function build() {
         const jsonFile = `${distDir}/public.json`;//distDir !!!
 
         await fs.remove(zipFile);
-        execSync(`zip -r ${zipFile} .`, {cwd: publicDir, stdio: 'inherit'});
+
+        // Create zip using yazl (cross-platform)
+        await new Promise((resolve, reject) => {
+            const zipArchive = new yazl.ZipFile();
+
+            // Recursively add all files from publicDir
+            const addFilesToZip = async (dir, zipPath = '') => {
+                const entries = await fs.readdir(dir, { withFileTypes: true });
+
+                for (const entry of entries) {
+                    const fullPath = path.join(dir, entry.name);
+                    const relativePath = zipPath ? `${zipPath}/${entry.name}` : entry.name;
+
+                    if (entry.isDirectory()) {
+                        await addFilesToZip(fullPath, relativePath);
+                    } else {
+                        zipArchive.addFile(fullPath, relativePath);
+                    }
+                }
+            };
+
+            addFilesToZip(publicDir).then(() => {
+                zipArchive.end();
+
+                const writeStream = fs.createWriteStream(zipFile);
+                zipArchive.outputStream.pipe(writeStream);
+
+                writeStream.on('close', () => resolve());
+                writeStream.on('error', (err) => reject(err));
+            }).catch(reject);
+        });
 
         const data = (await fs.readFile(zipFile)).toString('base64');
         await fs.writeFile(jsonFile, JSON.stringify({data}));

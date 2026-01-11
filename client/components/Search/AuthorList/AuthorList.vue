@@ -197,8 +197,6 @@ class AuthorList extends BaseList {
         result = `${count}`;
         if (item.seriesLoaded) {
             const rec = item.seriesLoaded[book.series];
-            // заплатка для исправления https://github.com/bookpauk/inpx-web/issues/10
-            // по невыясненным причинам rec иногда равен undefined
             if (rec) {
                 const totalCount = (this.showDeleted ? rec.bookCount + rec.bookDelCount : rec.bookCount);
                 result += `/${totalCount}`;

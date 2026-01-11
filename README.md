@@ -1,413 +1,330 @@
-inpx-web
-========
+<div align="center">
 
-Веб-сервер для поиска по .inpx-коллекции.
+# 📚 YggLibrary
 
-Выглядит следующим образом: [https://lib.omnireader.ru](https://lib.omnireader.ru)
+### Web Server for .inpx Library Collections on Yggdrasil Network
 
-.inpx - индексный файл для импорта\экспорта информации из базы данных сетевых библиотек
-в базу каталогизатора [MyHomeLib](https://alex80.github.io/mhl/)
-или [freeLib](http://sourceforge.net/projects/freelibdesign)
-или [LightLib](https://lightlib.azurewebsites.net)
+[![License: CC0](https://img.shields.io/badge/License-CC0%201.0-lightgrey.svg)](LICENSE.md)
+[![Node Version](https://img.shields.io/badge/Node-16+-43853d?logo=node.js)](https://nodejs.org/)
+[![Yggdrasil](https://img.shields.io/badge/Yggdrasil-Network-green)](https://yggdrasil-network.github.io/)
 
-[Установка](#usage): просто поместить приложение `inpx-web` в папку с .inpx-файлом и файлами библиотеки (zip-архивами) и запустить.
+**Full-featured digital library server with web interface and OPDS support**
 
-По умолчанию, веб-сервер будет доступен по адресу [http://127.0.0.1:12380](http://127.0.0.1:12380)
+**Languages:** 🇬🇧 English | [🇷🇺 Русский](README.ru.md)
 
-OPDS-сервер доступен по адресу [http://127.0.0.1:12380/opds](http://127.0.0.1:12380/opds)
+[Quick Start](#quick-start) • [Features](#features) • [Installation](#installation) • [Configuration](#configuration)
 
-Для указания местоположения .inpx-файла или папки с файлами библиотеки, воспользуйтесь [параметрами командной строки](#cli).
-Дополнительные параметры сервера настраиваются в [конфигурационном файле](#config).
+</div>
 
-[Отблагодарить автора проекта](https://donatty.com/liberama)
+---
 
-## 
-* [Возможности программы](#capabilities)
-* [Использование](#usage)
-    * [Параметры командной строки](#cli)
-    * [Конфигурация](#config)
-    * [Удаленная библиотека](#remotelib)
-    * [Фильтр по авторам и книгам](#filter)
-    * [Настройка https с помощью nginx](#https)
-* [Сборка релизов](#build)
-* [Запуск без сборки релиза](#native_run)
-* [Разработка](#development)
+## Overview
 
-<a id="capabilities" />
+YggLibrary is a web server for searching and browsing digital library collections. It parses .inpx index files (used by MyHomeLib, freeLib, and LightLib) and serves books from ZIP archives via a modern web interface and OPDS server. The server runs natively on Yggdrasil Network IPv6 addresses.
 
-## Возможности программы
-- веб-интерфейс и OPDS-сервер
-- поиск по автору, серии, названию и пр.
-- скачивание книги, копирование ссылки или открытие в читалке
-- возможность указать рабочий каталог при запуске, а также расположение .inpx и файлов библиотеки
-- ограничение доступа по паролю
-- работа в режиме "удаленная библиотека"
-- фильтр авторов и книг при создании поисковой БД для создания своей коллекции "на лету"
-- подхват изменений .inpx-файла (периодическая проверка), автоматическое пересоздание поисковой БД
-- мощная оптимизация, хорошая скорость поиска
-- релизы под Linux, MacOS и Windows
+> [!NOTE]
+> .inpx is an index file format for importing/exporting information from network library databases into catalog applications like [MyHomeLib](https://alex80.github.io/mhl/), [freeLib](http://sourceforge.net/projects/freelibdesign), or [LightLib](https://lightlib.azurewebsites.net).
 
-<a id="usage" />
+---
 
-## Использование
-Поместите приложение `inpx-web` в папку с .inpx-файлом и файлами библиотеки и запустите.
-Там же, при первом запуске, будет создана рабочая директория `.inpx-web`, в которой хранится
-конфигурационный файл `config.json`, файлы базы данных, журналы и прочее.
+## Quick Start
 
-По умолчанию веб-интерфейс будет доступен по адресу [http://127.0.0.1:12380](http://127.0.0.1:12380)
+**For Users:**
 
-OPDS-сервер доступен по адресу [http://127.0.0.1:12380/opds](http://127.0.0.1:12380/opds)
+1. Download the latest release from [releases page](https://github.com/JB-SelfCompany/ygglibrary/releases/latest)
+2. Place the executable in a directory with your .inpx file and ZIP book archives
+3. Run: `./ygglibrary`
+4. Access web interface at `http://127.0.0.1:12380`
+5. Or use OPDS at `http://127.0.0.1:12380/opds`
 
-<a id="cli" />
+**For Developers:**
 
-### Параметры командной строки
-Запустите `inpx-web --help`, чтобы увидеть список опций:
-```console
-Usage: inpx-web [options]
-
-Options:
-  --help               Показать опции командной строки
-  --host=<ip>          Задать имя хоста для веб сервера, по умолчанию: 0.0.0.0
-  --port=<port>        Задать порт для веб сервера, по умолчанию: 12380
-  --config=<filepath>  Задать файл конфигурации, по умолчанию: <dataDir>/config.json
-  --data-dir=<dirpath> (или --app-dir) Задать рабочую директорию, по умолчанию: <execDir>/.inpx-web
-  --lib-dir=<dirpath>  Задать директорию библиотеки (с zip-архивами), по умолчанию: там же, где лежит файл приложения
-  --inpx=<filepath>    Задать путь к файлу .inpx, по умолчанию: тот, что найдется в директории библиотеки
-  --recreate           Принудительно пересоздать поисковую БД при запуске приложения
-  --unsafe-filter      Использовать небезопасный фильтр на свой страх и риск
+```bash
+git clone https://github.com/JB-SelfCompany/ygglibrary.git
+cd ygglibrary
+npm install
+npm run dev
 ```
 
-<a id="config" />
+---
 
-### Конфигурация
+## Features
 
-По умолчанию, при первом запуске в рабочей директории будет создан конфигурационный файл `config.json`.
-При необходимости, можно настроить нужный параметр в этом файле вручную. Параметры командной
-строки имеют больший приоритет, чем настройки из `config.json`.
+- **Search & Browse** - Multi-field search by author, series, title, genre, language with advanced queries and real-time results
+- **Modern UI** - Vue 3 + Quasar framework, responsive design, dark mode, customizable display options
+- **OPDS Server** - Full OPDS compliance with authentication, catalog browsing, and search support
+- **Performance** - Embedded jembadb database with multi-layer caching (memory + disk), configurable cache sizes, low memory mode
+- **Yggdrasil Support** - Native IPv6 support, multi-host binding (IPv4 + Yggdrasil simultaneously)
+- **Remote Library** - Client-server mode to separate web interface and file storage
+- **Author/Book Filtering** - Create custom collections on the fly with include/exclude filters
+- **Auto-reload** - Detects .inpx file changes and rebuilds database automatically
+- **Security** - Password protection, session management, HTTPS support via nginx reverse proxy
 
-```js
-{
-    // рабочая директория приложения, аналог параметра командной строки --data-dir (или --app-dir)
-    // пустая строка: использовать значение по умолчанию - <execDir>/.inpx-web
-    // где execDir - директория файла приложения
-    "dataDir": "",
+---
 
-    // директория для хранения временных файлов
-    // пустая строка: использовать значение по умолчанию - <dataDir>/tmp
-    // специальное значение "${OS}" указывается для использования системного каталога:
-    // "${OS}" => "<os_temporary_dir>/inpx-web"
-    "tempDir": "",
+## Installation
 
-    // директория для хранения логов
-    // пустая строка: использовать значение по умолчанию - <dataDir>/logs
-    "logDir": "",
+### Prerequisites
 
-    // директория библиотеки (с zip-архивами), аналог параметра командной строки --lib-dir
-    // пустая строка: использовать значение по умолчанию - директорию файла приложения (execDir)
-    "libDir": "",
+**Users:** None! Single executable with no dependencies.
 
-    // путь к файлу .inpx, аналог параметра командной строки --inpx
-    // пустая строка: использовать значение по умолчанию - inpx-файл, что найдется в директории библиотеки
-    "inpx": "",
+**Developers:** [Node.js 16+](https://nodejs.org/) and [npm](https://www.npmjs.com/)
 
-    // конфигурационный файл для фильтра по авторам и книгам (см. ниже)
-    // пустая строка: использовать значение по умолчанию - файл filter.json в директории файла конфигурации
-    "inpxFilterFile": "",
+### From Binary
 
-    // разрешить(true)/запретить(false) перезаписывать файл конфигурации, если появились новые параметры для настройки
-    // файл перезаписывается с сохранением всех предыдущих настроек и с новыми по умолчанию
-    // бывает полезно при выходе новых версий приложения
-    "allowConfigRewrite": false,
+```bash
+# Download for your platform from releases page
+wget https://github.com/JB-SelfCompany/ygglibrary/releases/latest/download/ygglibrary-linux-x64.tar.gz
+tar -xzf ygglibrary-linux-x64.tar.gz
+./ygglibrary
+```
 
-    // разрешить(true)/запретить(false) использовать небезопасный фильтр (см. ниже)
-    // аналог параметра командной строки --unsafe-filter
-    "allowUnsafeFilter": false,
+### From Source
 
-    // пароль для ограничения доступа к веб-интерфейсу сервера
-    // пустое значение - доступ без ограничений
-    "accessPassword": "",
+```bash
+git clone https://github.com/JB-SelfCompany/ygglibrary.git
+cd ygglibrary
+npm install
+npm run release  # Or: npm run build:linux / build:win / build:macos
+```
 
-    // таймаут автозавершения сессии доступа к веб-интерфейсу (если задан accessPassword),
-    // при неактивности в течение указанного времени (в минутах), пароль будет запрошен заново
-    // 0 - отключить таймаут, время доступа по паролю не ограничено
-    "accessTimeout": 0,
+### CLI Options
 
-    // включить(true)/выключить(false) возможность расширенного поиска (раздел "</>")
-    // расширенный поиск не оптимизирован, поэтому может сильно нагружать сервер
-    // чтобы ускорить поиск, увеличьте параметр dbCacheSize
-    "extendedSearch": true,
+```bash
+./ygglibrary                            # Default: 127.0.0.1:12380
+./ygglibrary --port 8080                # Custom port
+./ygglibrary --host 192.168.1.100       # Custom host
+./ygglibrary --inpx /path/to/file.inpx  # Specify .inpx file
+./ygglibrary --lib-dir /path/to/books   # Specify library directory
+./ygglibrary --recreate                 # Force database rebuild
+./ygglibrary --help                     # Show all options
+```
 
-    // содержимое кнопки-ссылки "(читать)", если не задано - кнопка "(читать)" не показывается
-    // пример: "https://omnireader.ru/#/reader?url=${DOWNLOAD_LINK}"
-    // на место ${DOWNLOAD_LINK} будет подставлена ссылка на скачивание файла книги
-    // пример: "https://mydomain.ru/#/reader?url=http://127.0.0.1:8086${DOWNLOAD_URI}"
-    // на место ${DOWNLOAD_URI} будут подставлены параметры (без имени хоста) из ссылки на скачивание файла книги
-    "bookReadLink": "",
+### Production Setup
 
-    // включить(true)/выключить(false) журналирование
-    "loggingEnabled": true,
+<details>
+<summary><b>Systemd Service (Linux)</b></summary>
 
-    // включить/выключить ежеминутный вывод в лог memUsage и loadAvg
-    "logServerStats": false,
+Create `/etc/systemd/system/ygglibrary.service`:
 
-    // включить/выключить вывод в лог запросов и времени их выполнения
-    "logQueries": false,
+```ini
+[Unit]
+Description=YggLibrary Server
+After=network.target
 
-    // максимальный размер кеша каждой таблицы в БД, в блоках (требуется примерно 1-10Мб памяти на один блок)
-    // если надо кешировать всю БД, можно поставить значение от 1000 и больше
-    "dbCacheSize": 5,
+[Service]
+Type=simple
+User=ygglibrary
+WorkingDirectory=/opt/ygglibrary
+ExecStart=/opt/ygglibrary/ygglibrary --data-dir /var/lib/ygglibrary --lib-dir /srv/library
+Restart=on-failure
 
-    // максимальный размер в байтах директории закешированных файлов в <раб.дир>/public-files
-    // чистка каждый час
-    "maxFilesDirSize": 1073741824,
-    
-    // включить(true)/выключить(false) серверное кеширование запросов на диске и в памяти
-    "queryCacheEnabled": true,
+[Install]
+WantedBy=multi-user.target
+```
 
-    // размер кеша запросов в оперативной памяти (количество)
-    // 0 - отключить кеширование запросов в оперативной памяти
-    "queryCacheMemSize": 50,
+```bash
+sudo useradd --system --no-create-home --shell /bin/false ygglibrary
+sudo mkdir -p /opt/ygglibrary /var/lib/ygglibrary
+sudo cp ygglibrary /opt/ygglibrary/
+sudo systemctl enable --now ygglibrary
+```
 
-    // размер кеша запросов на диске (количество)
-    // 0 - отключить кеширование запросов на диске
-    "queryCacheDiskSize": 500,
+</details>
 
-    // периодичность чистки кеша запросов на сервере, в минутах
-    // 0 - отключить чистку
-    "cacheCleanInterval": 60,
+<details>
+<summary><b>Nginx Reverse Proxy (HTTPS)</b></summary>
 
-    // периодичность проверки изменений .inpx-файла, в минутах
-    // если файл изменился, поисковая БД будет автоматически пересоздана
-    // 0 - отключить проверку
-    "inpxCheckInterval": 60,
+```nginx
+server {
+    listen 80;
+    server_name library.example.com;
 
-    // включить(true)/выключить(false) режим работы с малым количеством физической памяти на машине
-    // при включении этого режима, количество требуемой для создания БД памяти снижается примерно в 1.5-2 раза
-    // во столько же раз увеличивается время создания
-    "lowMemoryMode": false,
-
-    // включить(true)/выключить(false) полную оптимизацию поисковой БД
-    // ускоряет работу поиска, но увеличивает размер БД в 2-3 раза при импорте INPX
-    "fullOptimization": false,
-
-    // включить(true)/выключить(false) режим "Удаленная библиотека" (сервер)
-    "allowRemoteLib": false,
-
-    // включить(Object)/выключить(false) режим "Удаленная библиотека" (клиент)
-    // подробнее см. раздел "Удаленная библиотека" ниже
-    "remoteLib": false,
-
-    // настройки веб-сервера
-    // парамертр root указывает путь для кореневой страницы inpx-web
-    // например для "root": "/library", веб-интерфейс будет доступен по адресу http://127.0.0.1:12380/library
-    // root необходим при настройке reverse-proxy и встраивании inpx-web в уже существующий сервер
-    "server": {
-        "host": "0.0.0.0",
-        "port": "12380",
-        "root": ""
-    },
-
-    // настройки opds-сервера
-    // user, password используются для Basic HTTP authentication
-    // параметр root задает путь для доступа к opds-серверу
-    "opds": {
-        "enabled": true,
-        "user": "",
-        "password": "",
-        "root": "/opds"
-    },
-
-    // страница для скачивания свежего релиза
-    "latestReleaseLink": "https://github.com/bookpauk/inpx-web/releases/latest",
-
-    // api для проверки новой версии, 
-    // пустая строка - отключить проверку выхода новых версий
-    "checkReleaseLink": "https://api.github.com/repos/bookpauk/inpx-web/releases/latest",
-
-    // настройки по умолчанию для веб-интерфейса
-    // устанавливаются при первой загрузке страницы в браузере
-    // дальнейшие изменения настроек с помощью веб-интерфейса уже сохраняются в самом браузере
-    "uiDefaults": {
-        "limit": 20, // результатов на странице
-        "downloadAsZip": false, // скачивать книги в виде zip-архива
-        "showCounts": true, // показывать количество
-        "showRates": true, // показывать оценки
-        "showInfo": true, // показывать кнопку (инфо)
-        "showGenres": true, // показывать жанры
-        "showDates": false, // показывать даты поступления
-        "showDeleted": false, // показывать удаленные
-        "abCacheEnabled": true, // кешировать запросы
-        "langDefault": "", // язык по умолчанию (например "ru,en")
-        "showJson": false, // показывать JSON (в расширенном поиске)
-        "showNewReleaseAvailable": true // уведомлять о выходе новой версии
+    location / {
+        proxy_pass http://127.0.0.1:12380;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
     }
 }
 ```
 
-<a id="remotelib" />
-
-### Удаленная библиотека
-
-В случае, когда необходимо физически разнести веб-интерфейс и библиотеку файлов на разные машины,
-приложение может работать в режиме клиент-сервер: веб-интерфейс, поисковый движок и поисковая БД на одной машине (клиент),
-а библиотека книг и .inpx-файл на другой (сервер).
-
-Для этого необходимо развернуть два приложения, первое из которых будет клиентом для второго.
-
-На сервере правим `config.json`:
-```
-    "accessPassword": "123456",
-    "allowRemoteLib": true,
+```bash
+sudo ln -s /etc/nginx/sites-available/ygglibrary /etc/nginx/sites-enabled/
+sudo certbot --nginx -d library.example.com
 ```
 
-На клиенте:
-```
-    "remoteLib": {
-    	"accessPassword": "123456",
-        "url": "ws://server.host:12380"
-    },
-```
+</details>
 
-Если сервер работает по протоколу `http://`, то указываем протокол `ws://`, а для `https://` соответственно `wss://`.
-Пароль не обязателен, но необходим в случае, если сервер тоже "смотрит" в интернет, для ограничения доступа к его веб-интерфейсу.
-При указании `"remoteLib": {...}` настройки командной строки --inpx и --lib-dir игнорируются,
-т.к. файлы .inpx-индекса и библиотеки используются удаленно.
+---
 
-<a id="filter" />
+## Configuration
 
-### Фильтр по авторам и книгам
+Configuration file: `<data-dir>/config.json` (auto-created on first run)
 
-При создании поисковой БД, во время загрузки и парсинга .inpx-файла, имеется возможность
-отфильтровать авторов и книги, задав определенные критерии. По умолчанию, для этого небходимо создать
-в директории конфигурационного файла (там же, где `config.json`) файл `filter.json` следующего вида:
+### Key Settings
+
 ```json
 {
-  "info": {
-    "collection": "Новое название коллекции",
-    "version": "1.0.0"
+  "server": {
+    "hosts": ["0.0.0.0"],           // Bind addresses (supports multiple)
+    "port": "12380"
   },
-  "filter": "(r) => r.del == 0",
-  "includeAuthors": ["Имя автора 1", "Имя автора 2"],
-  "excludeAuthors": ["Имя автора"]
-}
-```
-При фильтрации, авторы и их книги из `includeAuthors` будут оставлены, а из `excludeAuthors` исключены.
-Использование совместно `includeAuthors` и `excludeAuthors` имеет мало смысла, поэтому для включения
-определенных авторов можно использовать только `includeAuthors`:
-```json
-{
-  "info": {
-    "collection": "Новое название коллекции"
+  "opds": {
+    "enabled": true,
+    "user": "",                     // Optional OPDS auth
+    "password": "",
+    "root": "/opds"
   },
-  "includeAuthors": ["Имя автора 1", "Имя автора 2"]
-}
-```
-Для исключения:
-```json
-{
-  "info": {
-    "collection": "Новое название коллекции"
-  },
-  "excludeAuthors": ["Имя автора 1", "Имя автора 2"]
+  "accessPassword": "",             // Web interface password
+  "dbCacheSize": 5,                 // Cache size (blocks, ~1-10MB each)
+  "lowMemoryMode": false,           // Reduce memory usage
+  "queryCacheEnabled": true,
+  "inpxCheckInterval": 60,          // Auto-reload check (minutes)
+  "allowRemoteLib": false,          // Enable remote library server
+  "remoteLib": false                // Remote library client config
 }
 ```
 
-Параметр `filter` используется для более гибкой фильтрации по атрибутам записей из .inpx.
-Уберем все записи, помеченные как удаленные и исключим "Имя автора 1":
+### Yggdrasil Support
+
+Bind to multiple addresses including Yggdrasil IPv6:
+
 ```json
 {
-  "info": {
-    "collection": "Новое название коллекции"
-  },
-  "filter": "(inpxRec) => inpxRec.del == 0",
-  "excludeAuthors": ["Имя автора 1"]
-}
-```
-Использование `filter` небезопасно, т.к. позволяет выполнить произвольный js-код внутри программы,
-поэтому запуск приложения в этом случае должен сопровождаться дополнительным параметром командной строки `--unsafe-filter`
-или разрешением в конфиге `allowUnsafeFilter`.
-Названия атрибутов inpxRec соответствуют названиям в нижнем регистре из структуры structure.info в .inpx-файле.
-Файл `filter.json` можно расположить где угодно, что задается параметром `inpxFilterFile` в конфиге.
-<a id="https" />
-
-### Настройка https с помощью nginx
-Проще всего настроить https с помощью certbot и проксирования в nginx (пример для debian-based linux):
-
-```sh
-#ставим nginx
-sudo apt install nginx
-```
-```
-#правим конфиг nginx
-server {
-  listen 80;
-  server_name <имя сервера>;
-  set $inpx_web http://127.0.0.1:12380;
-
-  client_max_body_size 512m;
-  proxy_read_timeout 1h;
-
-  location / {
-    proxy_pass $inpx_web;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
+  "server": {
+    "hosts": ["0.0.0.0", "200:1234:5678:9abc::1"]  // IPv4 + Yggdrasil
   }
 }
 ```
-```sh
-#загружаем новый конфиг
-sudo service nginx reload
-```
-Далее следовать инструкции установки https://certbot.eff.org/instructions?ws=nginx&os=debianbuster
 
-<a id="build" />
+Or Yggdrasil only:
 
-### Сборка релизов
-Сборка только в среде Linux.
-Необходима версия node.js не ниже 16.
-
-Для сборки linux-arm64 необходимо предварительно установить [QEMU](https://wiki.debian.org/QemuUserEmulation).
-
-```sh
-git clone https://github.com/bookpauk/inpx-web
-cd inpx-web
-npm i
-npm run release
+```json
+{
+  "server": {
+    "hosts": ["200:1234:5678:9abc::1"]  // Yggdrasil only
+  }
+}
 ```
 
-Результат сборки будет доступен в каталоге `dist/release`
+### Remote Library Mode
 
-<a id="native_run" />
+**Server:** `{ "accessPassword": "password", "allowRemoteLib": true }`
 
-### Запуск без сборки релиза
-Т.к. сборщик pkg поддерживает не все платформы, то не всегда удается собрать релиз.
-Однако, можно скачать и запустить inpx-web нативным путем, с помощью nodejs.
-Ниже пример для Ubuntu, для других линуксов различия не принципиальны:
+**Client:** `{ "remoteLib": { "accessPassword": "password", "url": "ws://server.host:12380" } }`
 
-```sh
-# установка nodejs v16 и выше:
-curl -s https://deb.nodesource.com/setup_16.x | sudo bash
-sudo apt install nodejs -y
+### Author/Book Filtering
 
-# подготовка
-git clone https://github.com/bookpauk/inpx-web
-cd inpx-web
-npm i
-npm run build:client && node build/prepkg.js linux
+Create `filter.json` in config directory:
 
-# удалим файл development-среды, чтобы запускался в production-режиме
-rm ./server/config/application_env
-
-# запуск inpx-web, тут же будет создан каталог .inpx-web
-node server --app-dir=.inpx-web
+```json
+{
+  "info": { "collection": "My Collection" },
+  "includeAuthors": ["Author 1", "Author 2"]
+}
 ```
 
-<a id="development" />
+Or with advanced filtering (requires `--unsafe-filter`):
 
-### Разработка
-```sh
+```json
+{
+  "filter": "(inpxRec) => inpxRec.del == 0",
+  "excludeAuthors": ["Author Name"]
+}
+```
+
+---
+
+## Architecture
+
+```
+Browser ──HTTP──> Server (Node.js)
+   │     WebSocket     │
+   └──────────────────┘
+                      │
+                 jembadb (Search DB)
+                      │
+                 ZIP Files (Books)
+```
+
+**WebSocket API** (not REST):
+- Search queries → Results
+- Book downloads → Links
+- Database status
+- Configuration
+
+**OPDS Server** at `/opds`:
+- Catalog browsing
+- Search support
+- Downloads
+- Basic authentication
+
+---
+
+## Development
+
+```bash
+# Run dev server (hot reload enabled)
 npm run dev
+
+# Build
+npm run build:client        # Frontend only
+npm run build:linux         # Linux binary
+npm run build:all           # All platforms
+npm run release             # Full release
 ```
 
-Связаться с автором проекта: [bookpauk@gmail.com](mailto:bookpauk@gmail.com)
+**Architecture:**
+- Backend: Express.js + WebSocket + jembadb
+- Frontend: Vue 3 + Vuex + Quasar + Webpack
+- Pattern: Singleton for core modules
+
+---
+
+## Roadmap
+
+- [ ] Multi-language UI (currently Russian only)
+- [ ] Docker container
+- [ ] More OPDS features (covers, metadata)
+- [ ] Reading statistics
+- [ ] API documentation
+
+---
+
+## License
+
+**CC0 1.0 Universal (Public Domain)** - see [LICENSE.md](LICENSE.md)
+
+To the extent possible under law, the author has waived all copyright and related or neighboring rights to this work.
+
+---
+
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/JB-SelfCompany/ygglibrary/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/JB-SelfCompany/ygglibrary/discussions)
+- **Yggdrasil Network**: [yggdrasil-network.github.io](https://yggdrasil-network.github.io/)
+
+---
+
+## Acknowledgments
+
+- **MyHomeLib** - [alex80.github.io/mhl](https://alex80.github.io/mhl/)
+- **freeLib** - [sourceforge.net/projects/freelibdesign](http://sourceforge.net/projects/freelibdesign)
+- **LightLib** - [lightlib.azurewebsites.net](https://lightlib.azurewebsites.net)
+- **Vue.js** - [vuejs.org](https://vuejs.org/)
+- **Quasar Framework** - [quasar.dev](https://quasar.dev/)
+- **jembadb** - Custom embedded database
+
+---
+
+<div align="center">
+
+**Made with ❤️ for the decentralized web**
+
+⭐ Star us on GitHub — it helps!
+
+[⬆ Back to Top](#ygglibrary)
+
+</div>

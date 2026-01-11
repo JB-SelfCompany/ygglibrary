@@ -623,7 +623,7 @@ class Search {
 
             this.ready = true;
 
-            this.sendMessage({type: 'mes', data: 'hello-from-inpx-web'});
+            this.sendMessage({type: 'mes', data: 'hello-from-ygglibrary'});
             this.updateSearchFromRouteQuery(this.$route);
         })();
     }
@@ -656,7 +656,7 @@ class Search {
     }
 
     sendMessage(d) {
-        window.parent.postMessage(Object.assign({}, {from: 'inpx-web'}, d), '*');
+        window.parent.postMessage(Object.assign({}, {from: 'ygglibrary'}, d), '*');
     }
 
     sendCurrentUrl() {

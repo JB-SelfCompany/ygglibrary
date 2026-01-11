@@ -14,7 +14,7 @@ let log;
 let config;
 let argv;
 let branch = '';
-const argvStrings = ['host', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir', 'inpx'];
+const argvStrings = ['host', 'hosts', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir', 'inpx'];
 
 function showHelp(defaultConfig) {
     console.log(utils.versionText(defaultConfig));
@@ -24,6 +24,7 @@ function showHelp(defaultConfig) {
 Options:
   --help               Print ${defaultConfig.name} command line options
   --host=<ip>          Set web server host, default: ${defaultConfig.server.host}
+  --hosts=<ip,ip,...>  Set multiple web server hosts (comma-separated), e.g. --hosts=192.168.1.23,192.168.1.24
   --port=<port>        Set web server port, default: ${defaultConfig.server.port}
   --config=<filepath>  Set config filename, default: <dataDir>/config.json
   --data-dir=<dirpath> (or --app-dir) Set application working directory, default: <execDir>/.${defaultConfig.name}
@@ -83,7 +84,10 @@ async function init() {
         log('Initializing');
     }
 
-    if (argv.host) {
+    if (argv.hosts) {
+        // Parse comma-separated hosts list
+        config.server.hosts = argv.hosts.split(',').map(h => h.trim()).filter(h => h);
+    } else if (argv.host) {
         config.server.host = argv.host;
     }
 
@@ -171,8 +175,31 @@ async function main() {
     //server
     const app = express();
 
-    const server = http.createServer(app);
-    const wss = new WebSocket.Server({ server, maxPayload: config.maxPayloadSize*1024*1024 });
+    // Determine hosts to bind to
+    let hosts = [];
+    if (config.server.hosts && config.server.hosts.length > 0) {
+        hosts = config.server.hosts;
+    } else {
+        hosts = [config.server.host];
+    }
+
+    // Create WebSocket server with noServer option to handle multiple HTTP servers
+    const wss = new WebSocket.Server({ noServer: true, maxPayload: config.maxPayloadSize*1024*1024 });
+
+    // Create HTTP servers for each host
+    const servers = [];
+    for (const host of hosts) {
+        const server = http.createServer(app);
+
+        // Handle WebSocket upgrade for this server
+        server.on('upgrade', (request, socket, head) => {
+            wss.handleUpgrade(request, socket, head, (ws) => {
+                wss.emit('connection', ws, request);
+            });
+        });
+
+        servers.push({ server, host });
+    }
 
     let devModule = undefined;
     if (branch == 'development') {
@@ -209,10 +236,31 @@ async function main() {
         });
     }
 
-    server.listen(config.server.port, config.server.host, () => {
-        config.server.ready = true;
-        log(`Server accessible at http://127.0.0.1:${config.server.port} (listening on ${config.server.host}:${config.server.port})`);
+    // Start all servers
+    let startedCount = 0;
+    const startPromises = servers.map(({ server, host }) => {
+        return new Promise((resolve, reject) => {
+            server.listen(config.server.port, host, (err) => {
+                if (err) {
+                    reject(err);
+                } else {
+                    startedCount++;
+                    log(`Server listening on ${host}:${config.server.port}${host.includes(':') ? ' (IPv6, Yggdrasil compatible)' : ''}`);
+                    if (startedCount === servers.length) {
+                        config.server.ready = true;
+                        if (hosts.length === 1) {
+                            log(`Server accessible at http://127.0.0.1:${config.server.port}`);
+                        } else {
+                            log(`All ${hosts.length} servers started successfully`);
+                        }
+                    }
+                    resolve();
+                }
+            });
+        });
     });
+
+    await Promise.all(startPromises);
 }
 
 (async() => {
