@@ -268,12 +268,35 @@ Browser ──HTTP──> Server (Node.js)
 # Run dev server (hot reload enabled)
 npm run dev
 
-# Build
-npm run build:client        # Frontend only
-npm run build:linux         # Linux binary
+# Build client only
+npm run build:client        # Frontend only (development mode)
+
+# Build binaries
+npm run build:linux         # Linux x64 binary
+npm run build:linux-arm64   # Linux ARM64 binary
+npm run build:win           # Windows x64 binary
+npm run build:macos         # macOS x64 binary
 npm run build:all           # All platforms
-npm run release             # Full release
+
+# Create release archives (with versioning)
+./build.sh                  # All platforms → ygglibrary-1.0.0-*.zip
+./build.sh linux            # Single platform
+./build.sh linux-arm64      # ARM64 only
+
+# Or use npm scripts
+npm run release             # All platforms
+npm run release:linux       # Linux only
+npm run release:win         # Windows only
+npm run release:macos       # macOS only
+npm run release:arm64       # ARM64 only
 ```
+
+**Build Script Features:**
+- Automatic versioning from `package.json`
+- Creates ZIP archives: `ygglibrary-{version}-{platform}.zip`
+- Cross-platform archive creation (works on Windows/Linux/macOS)
+- Error-tolerant builds (continues if one platform fails)
+- Build status summary and archive size reporting
 
 **Architecture:**
 - Backend: Express.js + WebSocket + jembadb

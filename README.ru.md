@@ -268,12 +268,35 @@ sudo certbot --nginx -d library.example.com
 # Запуск dev-сервера (hot reload включен)
 npm run dev
 
-# Сборка
-npm run build:client        # Только фронтенд
-npm run build:linux         # Linux бинарник
+# Сборка только клиента
+npm run build:client        # Только фронтенд (режим разработки)
+
+# Сборка бинарников
+npm run build:linux         # Linux x64 бинарник
+npm run build:linux-arm64   # Linux ARM64 бинарник
+npm run build:win           # Windows x64 бинарник
+npm run build:macos         # macOS x64 бинарник
 npm run build:all           # Все платформы
-npm run release             # Полный релиз
+
+# Создание релизных архивов (с версионированием)
+./build.sh                  # Все платформы → ygglibrary-1.0.0-*.zip
+./build.sh linux            # Одна платформа
+./build.sh linux-arm64      # Только ARM64
+
+# Или использовать npm скрипты
+npm run release             # Все платформы
+npm run release:linux       # Только Linux
+npm run release:win         # Только Windows
+npm run release:macos       # Только macOS
+npm run release:arm64       # Только ARM64
 ```
+
+**Возможности скрипта сборки:**
+- Автоматическое версионирование из `package.json`
+- Создает ZIP архивы: `ygglibrary-{версия}-{платформа}.zip`
+- Кросс-платформенное создание архивов (работает на Windows/Linux/macOS)
+- Устойчивость к ошибкам (продолжает работу если одна платформа упала)
+- Сводка статуса сборки и отчет о размерах архивов
 
 **Архитектура:**
 - Backend: Express.js + WebSocket + jembadb
