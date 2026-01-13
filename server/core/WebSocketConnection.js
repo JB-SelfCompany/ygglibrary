@@ -8,18 +8,29 @@ const cleanPeriod = 5*1000;//5 секунд
 
 class WebSocketConnection {
     //messageLifeTime в секундах (проверка каждый cleanPeriod интервал)
-    constructor(url, openTimeoutSecs = 10, messageLifeTimeSecs = 30, webSocketOptions = {}) {
+    constructor(url, openTimeoutSecs = 10, messageLifeTimeSecs = 30, webSocketOptions = {}, yggdrasilMode = false) {
         this.WebSocket = (isBrowser ? WebSocket : require('ws'));
         this.url = url;
         this.webSocketOptions = webSocketOptions;
+        this.yggdrasilMode = yggdrasilMode;
+
+        // Увеличенные таймауты для Yggdrasil: 10→30сек, 30→90сек
+        if (yggdrasilMode) {
+            this.openTimeout = 30000;
+            this.messageLifeTime = 90000;
+            this.defaultSendTimeout = 15; // 15 секунд для обычных запросов в Yggdrasil
+        } else {
+            this.openTimeout = openTimeoutSecs * 1000;
+            this.messageLifeTime = messageLifeTimeSecs * 1000;
+            this.defaultSendTimeout = 4; // 4 секунды по умолчанию
+        }
 
         this.ws = null;
 
         this.listeners = [];
         this.messageQueue = [];
-        this.messageLifeTime = messageLifeTimeSecs*1000;
-        this.openTimeout = openTimeoutSecs*1000;
         this.requestId = 0;
+        this.firstRequestDone = false; // Флаг для первого запроса
 
         this.wsErrored = false;
         this.closed = false;
@@ -162,23 +173,33 @@ class WebSocketConnection {
         });
     }
 
-    async send(req, timeoutSecs = 4) {
+    async send(req, timeoutSecs = null) {
         await this._open();
         if (this.isOpen) {
             this.requestId = (this.requestId < 1000000 ? this.requestId + 1 : 1);
             const requestId = this.requestId;//реентерабельность!!!
 
+            // Для первого запроса в Yggdrasil увеличиваем таймаут
+            let actualTimeout = timeoutSecs || this.defaultSendTimeout;
+            if (this.yggdrasilMode && !this.firstRequestDone) {
+                actualTimeout = Math.max(actualTimeout, 30); // Минимум 30 секунд для первого запроса
+                this.firstRequestDone = true;
+            }
+
             this.ws.send(JSON.stringify(Object.assign({requestId}, req)));
 
             let resp = {};
             try {
-                resp = await this.message(requestId, timeoutSecs);
+                resp = await this.message(requestId, actualTimeout);
             } catch(e) {
-                this.terminate();
+                // В режиме Yggdrasil не закрываем соединение при таймауте
+                if (!this.yggdrasilMode) {
+                    this.terminate();
+                }
                 throw new Error('WebSocket не отвечает');
             }
 
-            if (resp._rok) {                
+            if (resp._rok) {
                 return requestId;
             } else {
                 throw new Error('Запрос не принят сервером');

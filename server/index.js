@@ -23,8 +23,8 @@ function showHelp(defaultConfig) {
 
 Options:
   --help               Print ${defaultConfig.name} command line options
-  --host=<ip>          Set web server host, default: ${defaultConfig.server.host}
-  --hosts=<ip,ip,...>  Set multiple web server hosts (comma-separated), e.g. --hosts=192.168.1.23,192.168.1.24
+  --host=<ip>          Set web server host (single address)
+  --hosts=<ip,ip,...>  Set multiple web server hosts (comma-separated), e.g. --hosts=0.0.0.0,200:1234::1
   --port=<port>        Set web server port, default: ${defaultConfig.server.port}
   --config=<filepath>  Set config filename, default: <dataDir>/config.json
   --data-dir=<dirpath> (or --app-dir) Set application working directory, default: <execDir>/.${defaultConfig.name}
@@ -88,7 +88,7 @@ async function init() {
         // Parse comma-separated hosts list
         config.server.hosts = argv.hosts.split(',').map(h => h.trim()).filter(h => h);
     } else if (argv.host) {
-        config.server.host = argv.host;
+        config.server.hosts = [argv.host];
     }
 
     if (argv.port) {
@@ -155,6 +155,14 @@ async function init() {
 
     if (await fs.pathExists(config.inpxFilterFile))
         log(`inpxFilterFile: ${config.inpxFilterFile}`)
+
+    // Yggdrasil mode announcement
+    if (config.yggdrasil) {
+        const remoteNote = config.remoteLib ? ' + remoteLib enhanced' : '';
+        log(`Yggdrasil mode: ENABLED (TCP keepalive, timeouts 120s, WS compression${remoteNote})`);
+    } else if (config.remoteLib) {
+        log('Remote Library mode: ENABLED (WARNING: Add "yggdrasil": true for better performance)');
+    }
 }
 
 function logQueries(app) {
@@ -176,20 +184,54 @@ async function main() {
     const app = express();
 
     // Determine hosts to bind to
-    let hosts = [];
-    if (config.server.hosts && config.server.hosts.length > 0) {
-        hosts = config.server.hosts;
-    } else {
-        hosts = [config.server.host];
-    }
+    let hosts = config.server.hosts && config.server.hosts.length > 0
+        ? config.server.hosts
+        : ['0.0.0.0'];
 
     // Create WebSocket server with noServer option to handle multiple HTTP servers
-    const wss = new WebSocket.Server({ noServer: true, maxPayload: config.maxPayloadSize*1024*1024 });
+    // Оптимизация для Yggdrasil: добавлена компрессия для уменьшения трафика
+    const wsOptions = {
+        noServer: true,
+        maxPayload: config.maxPayloadSize*1024*1024
+    };
+
+    // Если включен режим Yggdrasil, применяем компрессию WebSocket
+    if (config.yggdrasil) {
+        wsOptions.perMessageDeflate = {
+            zlibDeflateOptions: {
+                chunkSize: 1024,
+                memLevel: 7,
+                level: 3
+            },
+            zlibInflateOptions: {
+                chunkSize: 10 * 1024
+            },
+            clientNoContextTakeover: true,
+            serverNoContextTakeover: true,
+            serverMaxWindowBits: 10,
+            concurrencyLimit: 10,
+            threshold: 1024
+        };
+    }
+
+    const wss = new WebSocket.Server(wsOptions);
 
     // Create HTTP servers for each host
     const servers = [];
     for (const host of hosts) {
         const server = http.createServer(app);
+
+        // Оптимизация для Yggdrasil: настройка TCP параметров
+        if (config.yggdrasil) {
+            server.on('connection', (socket) => {
+                // Включаем TCP keepalive для обнаружения мертвых соединений (60 сек)
+                socket.setKeepAlive(true, 60000);
+                // TCP_NODELAY отключает алгоритм Nagle для снижения задержки
+                socket.setNoDelay(true);
+                // Увеличиваем таймаут для высоколатентных соединений (120 сек)
+                socket.setTimeout(120000);
+            });
+        }
 
         // Handle WebSocket upgrade for this server
         server.on('upgrade', (request, socket, head) => {
@@ -216,12 +258,41 @@ async function main() {
 
     const initStatic = require('./static');
     initStatic(app, config);
-    
+
     const webAccess = new (require('./core/WebAccess'))(config);
     await webAccess.init();
 
     const { WebSocketController } = require('./controllers');
-    new WebSocketController(wss, webAccess, config);
+    const wsController = new WebSocketController(wss, webAccess, config);
+
+    // DB download endpoint for remote library
+    app.get('/db-download/:token', async (req, res) => {
+        try {
+            const token = req.params.token;
+
+            // Verify token через WebWorker
+            const webWorker = require('./core/WebWorker').getInstance();
+            if (!webWorker.verifyDbDownloadToken(token)) {
+                return res.status(403).send('Invalid or expired token');
+            }
+
+            const dbArchivePath = await webWorker.getDbArchivePath();
+            if (!await require('fs-extra').pathExists(dbArchivePath)) {
+                return res.status(404).send('DB archive not found');
+            }
+
+            // Отправляем файл
+            res.setHeader('Content-Type', 'application/gzip');
+            res.setHeader('Content-Disposition', 'attachment; filename="db.tar.gz"');
+
+            const fs = require('fs');
+            const stream = fs.createReadStream(dbArchivePath);
+            stream.pipe(res);
+        } catch (err) {
+            log(LM_ERR, `DB download error: ${err.message}`);
+            res.status(500).send('Internal server error');
+        }
+    });
 
     if (config.logQueries) {
         logQueries(app);

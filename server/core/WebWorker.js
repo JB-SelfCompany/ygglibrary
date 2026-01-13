@@ -40,13 +40,46 @@ class WebWorker {
     constructor(config) {
         if (!instance) {
             this.config = config;
+
+            // ОПТИМИЗАЦИЯ: Увеличиваем кеши для remoteLib режима
+            if (config.remoteLib) {
+                const oldDbCache = config.dbCacheSize;
+                const oldMemCache = config.queryCacheMemSize;
+                const oldDiskCache = config.queryCacheDiskSize;
+
+                // Увеличиваем кеш блоков БД для ускорения запросов
+                if (!config.lowMemoryMode && config.dbCacheSize < 30) {
+                    config.dbCacheSize = 30; // ~30-60MB, значительно ускоряет поиск
+                }
+
+                // Увеличиваем кеш запросов в памяти
+                if (config.queryCacheMemSize < 200) {
+                    config.queryCacheMemSize = 200; // больше запросов в памяти
+                }
+
+                // Увеличиваем кеш запросов на диске
+                if (config.queryCacheDiskSize < 2000) {
+                    config.queryCacheDiskSize = 2000; // больше запросов на диске
+                }
+
+                const yggWarning = !config.yggdrasil ? ' (⚠ yggdrasil: false!)' : '';
+                log(`RemoteLib optimizations: dbCache ${oldDbCache}→${config.dbCacheSize}, memCache ${oldMemCache}→${config.queryCacheMemSize}, diskCache ${oldDiskCache}→${config.queryCacheDiskSize}${yggWarning}`);
+            }
+
             this.workerState = new WorkerState();
 
             this.remoteLib = null;
             if (config.remoteLib) {
                 this.remoteLib = new RemoteLib(config);
             }
-            
+
+            // DB Sharing for server-side database distribution
+            this.dbSharing = null;
+            if (config.allowRemoteLib && !config.remoteLib) {
+                const DbSharing = require('./DbSharing');
+                this.dbSharing = new DbSharing(config);
+            }
+
             this.inpxHashCreator = new InpxHashCreator(config);
             this.fb2Helper = new Fb2Helper();
             this.inpxFileHash = '';
@@ -119,7 +152,7 @@ class WebWorker {
         });
 
         try {
-            const dbCreator = new DbCreator(config);        
+            const dbCreator = new DbCreator(config);
 
             await dbCreator.run(db, (state) => {
                 this.setMyState(ssDbCreating, state);
@@ -136,6 +169,85 @@ class WebWorker {
         } finally {
             await db.unlock();
         }
+    }
+
+    /**
+     * Создает БД и master_db параллельно (для сервера с DB sharing)
+     */
+    async createDbWithMaster(dbPath) {
+        const config = this.config;
+
+        // Если DB sharing отключен - просто создаем обычную БД
+        if (!this.dbSharing) {
+            return await this.createDb(dbPath);
+        }
+
+        // Проверяем нужно ли создавать master БД параллельно
+        const shouldCreateMaster = await this.dbSharing.shouldCreateMasterDb();
+
+        if (!shouldCreateMaster) {
+            // Master БД актуальна, создаем только основную
+            log('Master DB is up to date, creating only main DB');
+            return await this.createDb(dbPath);
+        }
+
+        // Создаем обе БД параллельно
+        this.setMyState(ssDbCreating);
+        log('Creating main DB and master DB in parallel...');
+
+        if (await fs.pathExists(dbPath))
+            throw new Error(`createDbWithMaster.pathExists: ${dbPath}`);
+
+        const createMain = async () => {
+            const db = new JembaDbThread();
+            await db.lock({
+                dbPath,
+                create: true,
+                softLock: true,
+                tableDefaults: {
+                    cacheSize: config.dbCacheSize,
+                },
+            });
+
+            try {
+                const dbCreator = new DbCreator(config);
+                await dbCreator.run(db, (state) => {
+                    this.setMyState(ssDbCreating, state);
+
+                    if (state.fileName)
+                        log(`  [Main DB] load ${state.fileName}`);
+                    if (state.recsLoaded)
+                        log(`  [Main DB] processed ${state.recsLoaded} records`);
+                    if (state.job)
+                        log(`  [Main DB] ${state.job}`);
+                });
+
+                log('Main DB successfully created');
+            } finally {
+                await db.unlock();
+            }
+        };
+
+        const createMaster = async () => {
+            const { JembaDb } = require('jembadb');
+            const db = new JembaDb();
+
+            await this.dbSharing.createMasterDb(db, (state) => {
+                if (state.fileName)
+                    log(`  [Master DB] load ${state.fileName}`);
+                if (state.recsLoaded)
+                    log(`  [Master DB] processed ${state.recsLoaded} records`);
+                if (state.job)
+                    log(`  [Master DB] ${state.job}`);
+            });
+
+            log('Master DB successfully created');
+        };
+
+        // Запускаем создание параллельно
+        await Promise.all([createMain(), createMaster()]);
+
+        log('Both databases created successfully');
     }
 
     async loadOrCreateDb(recreate = false, iteration = 0) {
@@ -156,6 +268,7 @@ class WebWorker {
                 await tmpDb.lock({dbPath, softLock: true});
 
                 try {
+                    // Пытаемся открыть таблицу config
                     await tmpDb.open({table: 'config'});
                     const rows = await tmpDb.select({table: 'config', where: `@@id('inpxHash')`});
 
@@ -175,7 +288,30 @@ class WebWorker {
 
             //пересоздаем БД из INPX если нужно
             if (!await fs.pathExists(dbPath)) {
-                await this.createDb(dbPath);
+                // Для клиента remote lib: пробуем скачать БД с сервера
+                if (this.remoteLib) {
+                    try {
+                        log('Checking if server supports DB sharing...');
+                        if (await this.remoteLib.supportsDbSharing()) {
+                            log('Server supports DB sharing, downloading DB...');
+                            const downloaded = await this.remoteLib.downloadDb();
+                            if (downloaded) {
+                                log('DB downloaded successfully');
+                            }
+                        } else {
+                            log('Server does not support DB sharing, falling back to INPX download');
+                            await this.remoteLib.downloadInpxFile();
+                            await this.createDb(dbPath);
+                        }
+                    } catch (e) {
+                        log(LM_ERR, `DB download failed: ${e.message}, falling back to INPX`);
+                        await this.remoteLib.downloadInpxFile();
+                        await this.createDb(dbPath);
+                    }
+                } else {
+                    // Для сервера: создаем БД локально (с master_db параллельно если нужно)
+                    await this.createDbWithMaster(dbPath);
+                }
                 utils.freeMemory();
             }
 
@@ -197,7 +333,8 @@ class WebWorker {
                 //открываем таблицы
                 await db.openAll({exclude: ['author_id', 'series_id', 'title_id', 'book']});
 
-                const bookCacheSize = 500;
+                // ОПТИМИЗАЦИЯ для remoteLib: увеличенный кеш таблицы book
+                const bookCacheSize = config.remoteLib ? 1000 : 500;
                 await db.open({
                     table: 'book',
                     cacheSize: (config.lowMemoryMode || config.dbCacheSize > bookCacheSize ? config.dbCacheSize : bookCacheSize)
@@ -224,6 +361,11 @@ class WebWorker {
 
             log('Searcher DB ready');
             this.logServerStats();
+
+            // Выводим начальную статистику кеша для remoteLib
+            if (config.remoteLib) {
+                this.logCacheStats();
+            }
         } catch (e) {
             log(LM_FATAL, e.message);            
             asyncExit.exit(1);
@@ -631,6 +773,18 @@ class WebWorker {
             log(LM_ERR, e.message);
         }
     }
+
+    // Выводит статистику кеша (вызывается вручную или при инициализации)
+    logCacheStats() {
+        try {
+            if (this.config.remoteLib && this.dbSearcher) {
+                const cacheStats = this.dbSearcher.getCacheStats();
+                log(`Cache stats [ hits: ${cacheStats.memHits + cacheStats.diskHits}, misses: ${cacheStats.misses}, hitRate: ${cacheStats.hitRate}, memCache: ${cacheStats.memCacheSize} ]`);
+            }
+        } catch (e) {
+            log(LM_ERR, e.message);
+        }
+    }
     
     async periodicLogServerStats() {
         if (!this.config.logServerStats)
@@ -716,7 +870,22 @@ class WebWorker {
                     await utils.sleep(1000);
 
                 if (this.remoteLib) {
-                    await this.remoteLib.downloadInpxFile();
+                    // Для клиента: проверяем обновления БД на сервере
+                    try {
+                        if (await this.remoteLib.supportsDbSharing()) {
+                            // Пробуем скачать обновленную БД
+                            const downloaded = await this.remoteLib.downloadDb();
+                            if (downloaded) {
+                                log('DB updated from server, reloading...');
+                                await this.recreateDb();
+                            }
+                        } else {
+                            // Fallback: старый способ через INPX
+                            await this.remoteLib.downloadInpxFile();
+                        }
+                    } catch (e) {
+                        log(LM_ERR, `DB update check failed: ${e.message}`);
+                    }
                 }
 
                 const newInpxHash = await this.inpxHashCreator.getHash();
@@ -726,6 +895,7 @@ class WebWorker {
 
                 if (newInpxHash !== currentInpxHash) {
                     log('inpx file: changes found, recreating DB');
+                    // recreateDb() теперь автоматически создаст master_db параллельно
                     await this.recreateDb();
                 } else {
                     //log('inpx file: no changes');
@@ -756,6 +926,76 @@ class WebWorker {
             }
 
             await utils.sleep(checkReleaseInterval);
+        }
+    }
+
+    // Static method for getting singleton instance
+    static getInstance() {
+        return instance;
+    }
+
+    // DB Sharing methods -----------------------------------------------------
+
+    /**
+     * Возвращает информацию о master БД (для клиентов)
+     */
+    async getDbInfo() {
+        if (!this.dbSharing) {
+            throw new Error('DB sharing is not enabled');
+        }
+
+        return await this.dbSharing.getDbInfo();
+    }
+
+    /**
+     * Генерирует одноразовый токен для скачивания БД
+     */
+    generateDbDownloadToken() {
+        if (!this.dbSharing) {
+            throw new Error('DB sharing is not enabled');
+        }
+
+        return this.dbSharing.generateDownloadToken();
+    }
+
+    /**
+     * Проверяет и потребляет токен для скачивания БД
+     */
+    verifyDbDownloadToken(token) {
+        if (!this.dbSharing) {
+            return false;
+        }
+
+        return this.dbSharing.verifyAndConsumeToken(token);
+    }
+
+    /**
+     * Возвращает путь к архиву БД
+     */
+    async getDbArchivePath() {
+        if (!this.dbSharing) {
+            throw new Error('DB sharing is not enabled');
+        }
+
+        return this.dbSharing.getArchivePath();
+    }
+
+    /**
+     * Создает master БД для раздачи (если нужно)
+     */
+    async ensureMasterDbExists() {
+        if (!this.dbSharing) {
+            return;
+        }
+
+        if (await this.dbSharing.shouldCreateMasterDb()) {
+            log('Creating master DB for sharing...');
+            const db = new JembaDb();
+            await this.dbSharing.createMasterDb(db, (state) => {
+                if (state.job) {
+                    log(`Master DB: ${state.job}`);
+                }
+            });
         }
     }
 }

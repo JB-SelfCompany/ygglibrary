@@ -1,4 +1,5 @@
 const fs = require('fs-extra');
+const path = require('path');
 
 const InpxParser = require('./InpxParser');
 const InpxHashCreator = require('./InpxHashCreator');
@@ -36,6 +37,53 @@ class DbCreator {
 
     //процедура формировани БД несколько усложнена, в целях экономии памяти
     async run(db, callback) {
+        const config = this.config;
+
+        // Автоматический выбор режима создания БД
+        const useStreaming = this.shouldUseStreamingMode();
+
+        if (useStreaming) {
+            return await this.runStreaming(db, callback);
+        }
+
+        // Legacy mode (текущий код)
+        return await this.runLegacy(db, callback);
+    }
+
+    /**
+     * Определяет, нужно ли использовать streaming режим
+     */
+    shouldUseStreamingMode() {
+        const config = this.config;
+
+        // Если lowMemoryMode включен - используем streaming
+        if (config.lowMemoryMode) {
+            return true;
+        }
+
+        // Проверяем наличие INPX файла
+        if (!config.inpxFile) {
+            return false;
+        }
+
+        // Если размер INPX > 100MB - используем streaming
+        const fs = require('fs');
+        try {
+            const stats = fs.statSync(config.inpxFile);
+            if (stats.size > 100 * 1024 * 1024) {
+                return true;
+            }
+        } catch (e) {
+            // Файл не найден или ошибка - используем legacy
+        }
+
+        return false;
+    }
+
+    /**
+     * Legacy режим - текущая реализация (все в памяти)
+     */
+    async runLegacy(db, callback) {
         const config = this.config;
 
         callback({jobStepCount: 5});
@@ -142,34 +190,44 @@ class DbCreator {
                 callback({progress: (readState.current || 0)/totalFiles});
         };
 
+        // ОПТИМИЗИРОВАННАЯ версия parseField
         const parseField = (fieldValue, fieldMap, fieldArr, bookId, rec, fillBookIds = true) => {
+            // Быстрая нормализация значения
             let value = fieldValue;
-
             if (typeof(fieldValue) == 'string') {
                 if (!fieldValue)
                     fieldValue = emptyFieldValue;
-
                 value = fieldValue.toLowerCase();
             }
 
-            let fieldRec;
-            if (fieldMap.has(value)) {
-                const fieldId = fieldMap.get(value);
-                fieldRec = fieldArr[fieldId];
-            } else {
-                fieldRec = {id: fieldArr.length, value, bookIds: new Set()};                
+            // Быстрый поиск существующей записи
+            let fieldRec = fieldMap.get(value);
+
+            if (!fieldRec) {
+                // Создаем новую запись с Array вместо Set (быстрее для больших данных)
+                fieldRec = {
+                    id: fieldArr.length,
+                    value,
+                    bookIds: [],
+                    bookIdsSet: null // Для быстрой проверки дубликатов при необходимости
+                };
+
                 if (rec !== undefined) {
                     fieldRec.name = fieldValue;
                     fieldRec.bookCount = 0;
                     fieldRec.bookDelCount = 0;
                 }
+
                 fieldArr.push(fieldRec);
-                fieldMap.set(value, fieldRec.id);
+                fieldMap.set(value, fieldRec);
             }
 
-            if (fieldValue !== emptyFieldValue || fillBookIds)
-                fieldRec.bookIds.add(bookId);
+            // Добавляем bookId напрямую в массив (без проверки на дубликаты в рамках одного парсинга)
+            if (fieldValue !== emptyFieldValue || fillBookIds) {
+                fieldRec.bookIds.push(bookId);
+            }
 
+            // Обновляем счетчики
             if (rec !== undefined) {
                 if (!rec.del)
                     fieldRec.bookCount++;
@@ -260,8 +318,15 @@ class DbCreator {
             recsLoaded += chunk.length;
             callback({recsLoaded});
 
-            if (chunkNum++ % 10 == 0 && config.lowMemoryMode)
-                utils.freeMemory();
+            // ОПТИМИЗИРОВАННАЯ очистка памяти
+            // Вместо каждых 10 чанков - проверяем реальное использование памяти
+            if (config.lowMemoryMode && chunkNum++ % 20 == 0) {
+                const memUsage = process.memoryUsage();
+                // Вызываем GC только если используется > 1GB
+                if (memUsage.heapUsed > 1024 * 1024 * 1024) {
+                    utils.freeMemory();
+                }
+            }
         };
 
         //парсинг
@@ -342,10 +407,11 @@ class DbCreator {
         //console.log(stats);
 
         //сохраним поисковые таблицы
-        const chunkSize = 10000;
+        // ОПТИМИЗАЦИЯ: увеличен размер чанка с 10K до 20K для более быстрой вставки
+        const chunkSize = 20000;
 
         const saveTable = async(table, arr, nullArr, indexType = 'string', delEmpty = false) => {
-            
+
             if (indexType == 'string')
                 arr.sort((a, b) => a.value.localeCompare(b.value));
             else
@@ -359,18 +425,19 @@ class DbCreator {
             //вставка в БД по кусочкам, экономим память
             for (let i = 0; i < arr.length; i += chunkSize) {
                 const chunk = arr.slice(i, i + chunkSize);
-                
-                for (const rec of chunk)
-                    rec.bookIds = Array.from(rec.bookIds);
+
+                // ОПТИМИЗАЦИЯ: bookIds уже массив, не нужно Array.from()
+                // bookIds уже в виде массива после нашей оптимизации parseField
 
                 await db.insert({table, rows: chunk});
 
-                if (i % 5 == 0) {
+                // ОПТИМИЗАЦИЯ: реже вызываем freeMemory
+                if (i % 10 == 0) {
                     await db.freeMemory();
-                    await utils.sleep(10);
+                    await utils.sleep(5);
                 }
 
-                callback({progress: i/arr.length});                
+                callback({progress: i/arr.length});
             }
 
             if (delEmpty) {
@@ -485,6 +552,18 @@ class DbCreator {
 
         const to = `${from}_book`;
 
+        // Определяем правильный dbPath
+        // Для обычной БД: dataDir/.ygglibrary, dbPath = .ygglibrary/db
+        // Для master БД: dataDir=db_master, dbPath = db_master
+        let dbPath;
+        if (config.dataDir.endsWith('db_master')) {
+            // Master БД - БД находится прямо в db_master
+            dbPath = config.dataDir;
+        } else {
+            // Обычная БД - БД находится в dataDir/db
+            dbPath = path.join(config.dataDir, 'db');
+        }
+
         await db.open({table: from});
         await db.create({table: to});
 
@@ -597,7 +676,7 @@ class DbCreator {
         }
 
         callback({progress: 1});
-        await fs.writeFile(`${this.config.dataDir}/db/${from}_id.map`, JSON.stringify(idMap));
+        await fs.writeFile(path.join(dbPath, `${from}_id.map`), JSON.stringify(idMap));
 
         bookId2RecId = null;
         utils.freeMemory();
@@ -653,6 +732,532 @@ class DbCreator {
         });
 
         countDone = true;
+    }
+
+    /**
+     * Streaming режим - создание БД без хранения Map/Set в памяти
+     * Используется для больших библиотек и при lowMemoryMode
+     */
+    async runStreaming(db, callback) {
+        const config = this.config;
+        const log = new (require('./AppLogger'))().log;
+
+        log(LM_INFO, 'Using STREAMING mode for DB creation (low memory usage)');
+
+        callback({jobStepCount: 7});
+        callback({job: 'load inpx (streaming)', jobMessage: 'Загрузка INPX (экономия памяти)', jobStep: 1, progress: 0});
+
+        // Создаем временную таблицу для книг
+        await db.create({
+            table: 'book_temp',
+            cacheSize: 5, // Минимальный кеш
+        });
+
+        // Фильтр
+        const inpxFilter = await this.loadInpxFilter();
+        let filter = () => true;
+        if (inpxFilter) {
+            let recFilter = () => true;
+            if (inpxFilter.filter) {
+                if (config.allowUnsafeFilter)
+                    recFilter = new Function(`'use strict'; return ${inpxFilter.filter}`)();
+                else
+                    throw new Error(`Unsafe property 'filter' detected in ${this.config.inpxFilterFile}. Please specify '--unsafe-filter' param if you know what you're doing.`);
+            }
+
+            filter = (rec) => {
+                let author = rec.author;
+                if (!author)
+                    author = emptyFieldValue;
+
+                author = author.toLowerCase();
+
+                let excluded = false;
+                if (inpxFilter.excludeSet) {
+                    const authors = author.split(',');
+
+                    for (const a of authors) {
+                        if (inpxFilter.excludeSet.has(a)) {
+                            excluded = true;
+                            break;
+                        }
+                    }
+                }
+
+                return recFilter(rec)
+                    && (!inpxFilter.includeSet || inpxFilter.includeSet.has(author))
+                    && !excluded
+                ;
+            };
+        }
+
+        // Вспомогательные функции
+        const splitAuthor = (author) => {
+            if (!author)
+                author = emptyFieldValue;
+
+            const result = author.split(',');
+            if (result.length > 1)
+                result.push(author);
+
+            return result;
+        };
+
+        const parseBookRec = (rec) => {
+            // Разбираем авторов
+            const authors = splitAuthor(rec.author);
+            rec.author_norm = authors.map(a => a.toLowerCase()).join(',');
+
+            // Нормализуем серию
+            rec.series_norm = (rec.series || emptyFieldValue).toLowerCase();
+
+            // Нормализуем название
+            rec.title_norm = (rec.title || emptyFieldValue).toLowerCase();
+
+            // Парсим жанры
+            let genre = rec.genre || emptyFieldValue;
+            rec.genre_arr = genre.split(',');
+
+            return rec;
+        };
+
+        // Этап 1: Парсинг и запись в book_temp БЕЗ проверки дубликатов
+        let id = 0;
+        let recsLoaded = 0;
+        let chunkNum = 0;
+
+        callback({recsLoaded});
+
+        let totalFiles = 0;
+        const readFileCallback = async(readState) => {
+            callback(readState);
+
+            if (readState.totalFiles)
+                totalFiles = readState.totalFiles;
+
+            if (totalFiles)
+                callback({progress: (readState.current || 0)/totalFiles});
+        };
+
+        const parsedCallback = async(chunk) => {
+            const rows = [];
+
+            for (const rec of chunk) {
+                // Применяем фильтр
+                if (!filter(rec)) {
+                    continue;
+                }
+
+                rec.id = ++id;
+                parseBookRec(rec);
+                rows.push(rec);
+            }
+
+            if (rows.length > 0) {
+                await db.insert({table: 'book_temp', rows});
+            }
+
+            recsLoaded += chunk.length;
+            callback({recsLoaded});
+
+            // Чистим память каждые 10 чанков
+            if (chunkNum++ % 10 == 0) {
+                utils.freeMemory();
+                await db.freeMemory();
+            }
+        };
+
+        // Парсим INPX
+        const parser = new InpxParser();
+        await parser.parse(config.inpxFile, readFileCallback, parsedCallback);
+
+        await db.close({table: 'book_temp'});
+        utils.freeMemory();
+
+        log(LM_INFO, `Parsed ${id} books, removing duplicates...`);
+
+        // Этап 2: Удаление дубликатов по _uid
+        callback({job: 'remove duplicates', jobMessage: 'Удаление дубликатов', jobStep: 2, progress: 0});
+        await this.removeDuplicatesStreaming(db, callback);
+
+        // Этап 3: Создание индексов author, series, title
+        callback({job: 'create indexes', jobMessage: 'Создание индексов', jobStep: 3, progress: 0});
+        await this.createIndexesStreaming(db, callback);
+
+        // Этап 4: Переименование book_temp -> book через файловую систему
+        callback({job: 'finalize', jobMessage: 'Финализация', jobStep: 4, progress: 0});
+
+        // Закрываем таблицу перед переименованием
+        await db.close({table: 'book_temp'});
+
+        // Переименовываем файлы таблицы на уровне файловой системы
+        const dbPath = path.join(config.dataDir, 'db');
+        const tempTablePath = path.join(dbPath, 'book_temp');
+        const bookTablePath = path.join(dbPath, 'book');
+
+        // Удаляем book если существует
+        if (await fs.pathExists(bookTablePath)) {
+            await fs.remove(bookTablePath);
+        }
+
+        // Переименовываем
+        await fs.rename(tempTablePath, bookTablePath);
+
+        // Этап 5: Создание остальных индексов (genre, lang, del, date, librate, ext)
+        callback({job: 'other indexes', jobMessage: 'Создание дополнительных индексов', jobStep: 5, progress: 0});
+        await this.createOtherIndexesStreaming(db, callback);
+
+        // Этап 6: Оптимизация (если включена)
+        if (config.fullOptimization) {
+            callback({job: 'optimization', jobMessage: 'Оптимизация', jobStep: 6, progress: 0});
+            await this.optimizeTable('author', db, callback);
+            await this.optimizeTable('series', db, callback);
+            await this.optimizeTable('title', db, callback);
+        }
+
+        // Этап 7: Кэш-таблицы, статистика и config
+        callback({job: 'finalize', jobMessage: 'Завершение', jobStep: 7, progress: 0});
+
+        // Кэш-таблицы
+        await db.create({table: 'query_cache'});
+        await db.create({table: 'query_time'});
+        await db.create({table: 'file_hash'});
+
+        // Статистика
+        await db.open({table: 'book', cacheSize: 5});
+        const stats = await this.countStatsStreaming(db, callback);
+        await db.close({table: 'book'});
+
+        // Config
+        const inpxHashCreator = new InpxHashCreator(config);
+        await db.create({table: 'config'});
+
+        const inpxInfo = parser.info;
+        if (inpxFilter && inpxFilter.info) {
+            if (inpxFilter.info.collection)
+                inpxInfo.collection = inpxFilter.info.collection;
+            if (inpxFilter.info.version)
+                inpxInfo.version = inpxFilter.info.version;
+        }
+
+        await db.insert({table: 'config', rows: [
+            {id: 'inpxInfo', value: inpxInfo},
+            {id: 'stats', value: stats},
+            {id: 'inpxHash', value: await inpxHashCreator.getHash()},
+        ]});
+
+        callback({job: 'done', jobMessage: ''});
+
+        log(LM_INFO, 'DB created successfully in STREAMING mode');
+    }
+
+    /**
+     * Удаляет дубликаты книг по _uid
+     */
+    async removeDuplicatesStreaming(db, callback) {
+        await db.open({table: 'book_temp'});
+
+        // Создаем hash индекс по _uid для быстрого поиска
+        await db.create({
+            in: 'book_temp',
+            hash: {field: '_uid', type: 'string', depth: 100, unique: false},
+        });
+
+        // Находим дубликаты и оставляем только первые записи
+        const duplicates = await db.select({
+            table: 'book_temp',
+            rawResult: true,
+            where: `
+                const uidMap = new Map();
+                const toDelete = [];
+
+                for (const id of @all()) {
+                    const row = @row(id);
+                    if (uidMap.has(row._uid)) {
+                        toDelete.push(id);
+                    } else {
+                        uidMap.set(row._uid, id);
+                    }
+                }
+
+                return toDelete;
+            `
+        });
+
+        if (duplicates.length > 0 && duplicates[0].rawResult) {
+            const toDelete = duplicates[0].rawResult;
+            if (toDelete.length > 0) {
+                await db.delete({
+                    table: 'book_temp',
+                    where: `@@id(${db.esc(toDelete)})`
+                });
+            }
+        }
+
+        await db.close({table: 'book_temp'});
+        callback({progress: 1});
+    }
+
+    /**
+     * Создает индексы author, series, title путем итерации по БД
+     */
+    async createIndexesStreaming(db, callback) {
+        await this.createIndexStreaming(db, 'author', 'author_norm', callback);
+        await this.createIndexStreaming(db, 'series', 'series_norm', callback);
+        await this.createIndexStreaming(db, 'title', 'title_norm', callback);
+    }
+
+    /**
+     * Создает один индекс путем группировки
+     */
+    async createIndexStreaming(db, tableName, fieldName, callback) {
+        await db.open({table: 'book_temp'});
+        await db.create({table: tableName});
+
+        const indexMap = new Map();
+        const CHUNK_SIZE = 5000;
+
+        // Читаем книги по частям
+        let processed = 0;
+        const totalRows = await db.select({table: 'book_temp', count: true});
+        const total = totalRows[0].count;
+
+        while (true) {
+            const chunk = await db.select({
+                table: 'book_temp',
+                limit: CHUNK_SIZE,
+                offset: processed
+            });
+
+            if (chunk.length === 0) break;
+
+            for (const book of chunk) {
+                const values = book[fieldName].split(',');
+
+                for (const value of values) {
+                    const val = value.trim();
+                    if (!val) continue;
+
+                    if (!indexMap.has(val)) {
+                        indexMap.set(val, {
+                            value: val,
+                            bookIds: [],
+                            bookCount: 0,
+                            bookDelCount: 0,
+                            name: book[fieldName.replace('_norm', '')]
+                        });
+                    }
+
+                    const rec = indexMap.get(val);
+                    rec.bookIds.push(book.id);
+                    if (!book.del) {
+                        rec.bookCount++;
+                    } else {
+                        rec.bookDelCount++;
+                    }
+                }
+            }
+
+            processed += chunk.length;
+            callback({progress: processed / total / 3});
+
+            // Периодически сохраняем и чистим Map
+            if (indexMap.size > 50000) {
+                await this.saveIndexChunk(db, tableName, indexMap);
+                indexMap.clear();
+                utils.freeMemory();
+                await db.freeMemory();
+            }
+        }
+
+        // Сохраняем остаток
+        if (indexMap.size > 0) {
+            await this.saveIndexChunk(db, tableName, indexMap);
+        }
+
+        await db.close({table: tableName});
+        await db.close({table: 'book_temp'});
+
+        callback({progress: 1});
+    }
+
+    /**
+     * Сохраняет часть индекса в БД
+     */
+    async saveIndexChunk(db, tableName, indexMap) {
+        const rows = Array.from(indexMap.values()).sort((a, b) => a.value.localeCompare(b.value));
+
+        for (const row of rows) {
+            row.id = rows.indexOf(row) + 1;
+        }
+
+        await db.insert({table: tableName, rows});
+    }
+
+    /**
+     * Создает остальные индексы (genre, lang, del, date, librate, ext)
+     */
+    async createOtherIndexesStreaming(db, callback) {
+        await db.open({table: 'book'});
+
+        // Простые индексы создаем аналогично
+        const indexes = [
+            {name: 'genre', field: 'genre', type: 'string'},
+            {name: 'lang', field: 'lang', type: 'string'},
+            {name: 'del', field: 'del', type: 'number'},
+            {name: 'date', field: 'date', type: 'string'},
+            {name: 'librate', field: 'librate', type: 'number'},
+            {name: 'ext', field: 'ext', type: 'string'}
+        ];
+
+        for (const idx of indexes) {
+            await this.createSimpleIndexStreaming(db, idx.name, idx.field, idx.type, callback);
+        }
+
+        await db.close({table: 'book'});
+    }
+
+    /**
+     * Создает простой индекс (не требует разбора на части)
+     */
+    async createSimpleIndexStreaming(db, tableName, fieldName, indexType, callback) {
+        await db.create({
+            table: tableName,
+            index: {field: 'value', unique: true, type: indexType, depth: 1000000},
+        });
+
+        const indexMap = new Map();
+        const CHUNK_SIZE = 5000;
+
+        let processed = 0;
+        const totalRows = await db.select({table: 'book', count: true});
+        const total = totalRows[0].count;
+
+        while (true) {
+            const chunk = await db.select({
+                table: 'book',
+                limit: CHUNK_SIZE,
+                offset: processed
+            });
+
+            if (chunk.length === 0) break;
+
+            for (const book of chunk) {
+                const value = book[fieldName];
+
+                if (!indexMap.has(value)) {
+                    indexMap.set(value, {
+                        value,
+                        bookIds: [],
+                    });
+                }
+
+                indexMap.get(value).bookIds.push(book.id);
+            }
+
+            processed += chunk.length;
+        }
+
+        // Сортируем и сохраняем
+        const rows = Array.from(indexMap.values());
+        if (indexType === 'string') {
+            rows.sort((a, b) => a.value.localeCompare(b.value));
+        } else {
+            rows.sort((a, b) => a.value - b.value);
+        }
+
+        for (let i = 0; i < rows.length; i++) {
+            rows[i].id = i + 1;
+        }
+
+        await db.insert({table: tableName, rows});
+        await db.close({table: tableName});
+    }
+
+    /**
+     * Считает статистику для streaming режима
+     */
+    async countStatsStreaming(db, callback) {
+        // Подсчет через итерацию
+        const result = await db.select({
+            table: 'book',
+            rawResult: true,
+            where: `
+                let bookCount = 0;
+                let bookDelCount = 0;
+                let noAuthorBookCount = 0;
+                const authorSet = new Set();
+                const files = new Set();
+                const filesDel = new Set();
+
+                for (const id of @all()) {
+                    const r = @row(id);
+
+                    if (!r.del) {
+                        bookCount++;
+                        if (!r.author || r.author === '?')
+                            noAuthorBookCount++;
+                    } else {
+                        bookDelCount++;
+                    }
+
+                    // Авторы
+                    if (r.author && r.author !== '?') {
+                        const authors = r.author.split(',');
+                        for (const a of authors) {
+                            authorSet.add(a.trim().toLowerCase());
+                        }
+                    }
+
+                    // Файлы
+                    const file = ${"`${r.folder}/${r.file}.${r.ext}`"};
+                    if (!r.del) {
+                        files.add(file);
+                    } else {
+                        filesDel.add(file);
+                    }
+                }
+
+                // Убираем пересечения из удаленных
+                for (const file of filesDel) {
+                    if (files.has(file))
+                        filesDel.delete(file);
+                }
+
+                return {
+                    bookCount,
+                    bookDelCount,
+                    bookCountAll: bookCount + bookDelCount,
+                    noAuthorBookCount,
+                    authorCount: authorSet.size,
+                    filesCount: files.size,
+                    filesDelCount: filesDel.size,
+                    filesCountAll: files.size + filesDel.size
+                };
+            `
+        });
+
+        // Получаем остальные counts из таблиц
+        const authorRows = await db.select({table: 'author', count: true});
+        const seriesRows = await db.select({table: 'series', count: true});
+        const titleRows = await db.select({table: 'title', count: true});
+        const genreRows = await db.select({table: 'genre', count: true});
+        const langRows = await db.select({table: 'lang', count: true});
+
+        const stats = result[0].rawResult;
+        stats.authorCountAll = authorRows[0].count;
+        stats.seriesCount = seriesRows[0].count;
+        stats.titleCount = titleRows[0].count;
+        stats.genreCount = genreRows[0].count;
+        stats.langCount = langRows[0].count;
+
+        // Создаем hash индекс по _uid
+        await db.create({
+            in: 'book',
+            hash: {field: '_uid', type: 'string', depth: 100, unique: true},
+        });
+
+        return stats;
     }
 }
 

@@ -19,7 +19,6 @@
                 />
             </div>
 
-            <q-checkbox v-show="config.latestVersion" v-model="showNewReleaseAvailable" size="36px" label="Уведомлять о выходе новой версии" />
             <q-checkbox v-model="downloadAsZip" size="36px" label="Скачивать книги в виде zip-архива" />
             <q-checkbox v-model="showCounts" size="36px" label="Показывать количество" />
             <q-checkbox v-model="showRates" size="36px" label="Показывать оценки" />
@@ -86,9 +85,6 @@ const componentOptions = {
         abCacheEnabled(newValue) {
             this.commit('setSettings', {'abCacheEnabled': newValue});
         },
-        showNewReleaseAvailable(newValue) {
-            this.commit('setSettings', {'showNewReleaseAvailable': newValue});
-        },
     }
 };
 class SettingsDialog {
@@ -109,7 +105,6 @@ class SettingsDialog {
     showDates = true;
     showDeleted = false;
     abCacheEnabled = true;
-    showNewReleaseAvailable = true;
 
     limitOptions = [
         {label: '10', value: 10},
@@ -151,7 +146,6 @@ class SettingsDialog {
         this.showDates = settings.showDates;
         this.showDeleted = settings.showDeleted;
         this.abCacheEnabled = settings.abCacheEnabled;
-        this.showNewReleaseAvailable = settings.showNewReleaseAvailable;
     }
 
     okClick() {

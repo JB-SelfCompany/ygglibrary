@@ -32,6 +32,7 @@ const propsToSave = [
     'allowRemoteLib',
     'remoteLib',
     'server',
+    'yggdrasil',
     'opds',
     'uiDefaults',
 ];

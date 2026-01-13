@@ -3,19 +3,6 @@
         <div ref="scroller" class="col fit column no-wrap" style="overflow: auto; position: relative" @scroll="onScroll">
             <!-- Tool Panel begin -->
             <div ref="toolPanel" class="tool-panel column bg-cyan-2" style="position: sticky; top: 0; z-index: 10;">
-                <!-- Обновление -->
-                <div v-show="showNewReleaseAvailable && newReleaseAvailable" class="row q-py-sm bg-green-4 items-center">
-                    <div class="q-ml-sm" style="font-size: 120%">
-                        Доступна новая версия <b>{{ config.name }} v{{ config.latestVersion }}</b>
-                    </div>
-                    <DivBtn class="q-ml-sm q-px-sm bg-white" :size="20" @click.stop.prevent="openReleasePage">
-                        Скачать
-                    </DivBtn>
-                    <DivBtn class="q-ml-sm q-px-sm bg-white" :size="20" @click.stop.prevent="settingsDialogVisible = true">
-                        Отключить уведомление
-                    </DivBtn>
-                </div>
-
                 <!-- 1 -->
                 <div class="row">
                     <!-- 1-1 -->
@@ -333,12 +320,6 @@
             <div class="row q-ml-lg q-mb-sm">
                 <PageScroller v-show="pageCount > 1" v-model="search.page" :page-count="pageCount" />
             </div>
-
-            <div class="row justify-center">
-                <div class="q-mb-lg q-px-sm q-py-xs bg-cyan-2 clickable2" style="border: 1px solid #aaaaaa; border-radius: 6px; white-space: nowrap;" @click.stop.prevent="openReleasePage">
-                    {{ projectName }}
-                </div>
-            </div>
         </div>
 
         <SettingsDialog v-model="settingsDialogVisible" />
@@ -348,7 +329,25 @@
         <SelectDateDialog v-model="selectDateDialogVisible" v-model:date="search.date" />
         <SelectExtDialog v-model="selectExtDialogVisible" v-model:ext="search.ext" :ext-list="extList" />        
         <BookInfoDialog v-model="bookInfoDialogVisible" :book-info="bookInfo" :genre-map="genreMap" />
-        <SelectExtSearchDialog v-model="selectExtSearchDialogVisible" v-model:ext-search="extSearch" />        
+        <SelectExtSearchDialog v-model="selectExtSearchDialogVisible" v-model:ext-search="extSearch" />
+
+        <!-- Footer -->
+        <div class="bg-cyan-2 q-pa-sm" style="border-top: 1px solid #aaa; margin-top: auto;">
+            <div class="row items-center justify-center q-gutter-sm" style="font-size: 15px; color: #555;">
+                <span>© 2026 JB-SelfCompany</span>
+                <span v-if="config.version" style="color: #888;">•</span>
+                <span v-if="config.version" style="color: #888;">v{{ config.version }}</span>
+                <span v-if="newReleaseAvailable" style="color: #888;">→</span>
+                <a v-if="newReleaseAvailable" :href="releasePageUrl" target="_blank" class="clickable" style="color: #0066cc; text-decoration: none;" @click.stop>
+                    v{{ config.latestVersion }} доступна
+                </a>
+                <span style="color: #888;">•</span>
+                <a href="https://github.com/JB-SelfCompany/ygglibrary" target="_blank" class="clickable row items-center no-wrap" style="color: #555; text-decoration: none;" @click.stop>
+                    <q-icon name="la la-github" size="20px" class="q-mr-xs" />
+                    GitHub
+                </a>
+            </div>
+        </div>
     </div>
 </template>
 
@@ -536,7 +535,6 @@ class Search {
     limit = 20;
     extendedParams = false;
     showJson = false;
-    showNewReleaseAvailable = true;
 
     //stuff
     prevList = {};
@@ -639,7 +637,6 @@ class Search {
         this.abCacheEnabled = settings.abCacheEnabled;
         this.langDefault = settings.langDefault;
         this.showJson = settings.showJson;
-        this.showNewReleaseAvailable = settings.showNewReleaseAvailable;
     }
 
     recvMessage(d) {
@@ -669,6 +666,10 @@ class Search {
 
     get newReleaseAvailable() {
         return (this.config.latestVersion && this.config.version != this.config.latestVersion);
+    }
+
+    get releasePageUrl() {
+        return this.config.latestReleaseLink || 'https://github.com/JB-SelfCompany/ygglibrary/releases/latest';
     }
 
     get recStruct() {

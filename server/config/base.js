@@ -30,7 +30,9 @@ module.exports = {
     //поправить в случае, если были критические изменения в DbCreator или InpxParser
     //иначе будет рассинхронизация по кешу между сервером и клиентом на уровне БД
     dbVersion: '12',
-    dbCacheSize: 5,
+    // Размер кеша БД в блоках. Каждый блок ~1-2MB, 10 блоков = ~10-20MB памяти
+    // Для remoteLib автоматически увеличивается до 30 для лучшей производительности
+    dbCacheSize: 10,
 
     maxPayloadSize: 500,//in MB
     maxFilesDirSize: 1024*1024*1024,//1Gb
@@ -55,11 +57,14 @@ module.exports = {
     */
 
     server: {
-        host: '0.0.0.0', // deprecated, use hosts array instead
-        hosts: [], // array of hosts to bind, e.g. ['192.168.1.23', '192.168.1.24']. If empty, uses 'host' value
+        hosts: ['0.0.0.0'], // array of hosts to bind, e.g. ['192.168.1.23', '192.168.1.24', '200:1234::1']
         port: '22380',
         root: '',
     },
+
+    // Оптимизация для Yggdrasil Network (автоматически применяет TCP keepalive,
+    // увеличенные таймауты, WebSocket компрессию)
+    yggdrasil: false,
     //opds: false,
     opds: {
         enabled: true,

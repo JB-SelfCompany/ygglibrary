@@ -10,6 +10,11 @@ class InpxHashCreator {
     async getHash() {
         const config = this.config;
 
+        // Проверяем наличие INPX файла
+        if (!config.inpxFile) {
+            return '';
+        }
+
         let inpxFilterHash = '';
         if (await fs.pathExists(config.inpxFilterFile))
             inpxFilterHash = await utils.getFileHash(config.inpxFilterFile, 'sha256', 'hex');
@@ -21,6 +26,11 @@ class InpxHashCreator {
     }
 
     async getInpxFileHash() {
+        // Проверяем наличие INPX файла
+        if (!this.config.inpxFile) {
+            return '';
+        }
+
         return (
             await fs.pathExists(this.config.inpxFile) ?
             await utils.getFileHash(this.config.inpxFile, 'sha256', 'hex') :

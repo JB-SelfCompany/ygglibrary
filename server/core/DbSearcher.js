@@ -27,6 +27,14 @@ class DbSearcher {
         this.memCache = new Map();
         this.bookIdMap = {};
 
+        // Статистика для отладки производительности
+        this.cacheStats = {
+            memHits: 0,
+            diskHits: 0,
+            misses: 0,
+            lastResetTime: Date.now()
+        };
+
         this.periodicCleanCache();//no await
     }
 
@@ -923,6 +931,7 @@ class DbSearcher {
 
         if (this.queryCacheMemSize > 0 && memCache.has(key)) {//есть в недавних
             result = memCache.get(key);
+            this.cacheStats.memHits++;
 
             //изменим порядок ключей, для последующей правильной чистки старых
             memCache.delete(key);
@@ -931,6 +940,8 @@ class DbSearcher {
             const rows = await db.select({table: 'query_cache', where: `@@id(${db.esc(key)})`});
 
             if (rows.length) {//нашли в кеше
+                this.cacheStats.diskHits++;
+
                 await db.insert({
                     table: 'query_time',
                     replace: true,
@@ -954,7 +965,39 @@ class DbSearcher {
             }
         }
 
+        if (result === null) {
+            this.cacheStats.misses++;
+        }
+
         return result;
+    }
+
+    // Получить статистику кеша для мониторинга производительности
+    getCacheStats() {
+        const stats = this.cacheStats;
+        const total = stats.memHits + stats.diskHits + stats.misses;
+        const hitRate = total > 0 ? ((stats.memHits + stats.diskHits) / total * 100).toFixed(1) : 0;
+        const uptime = Math.floor((Date.now() - stats.lastResetTime) / 1000 / 60); // в минутах
+
+        return {
+            memHits: stats.memHits,
+            diskHits: stats.diskHits,
+            misses: stats.misses,
+            total,
+            hitRate: `${hitRate}%`,
+            memCacheSize: this.memCache.size,
+            uptime: `${uptime} min`
+        };
+    }
+
+    // Сбросить статистику
+    resetCacheStats() {
+        this.cacheStats = {
+            memHits: 0,
+            diskHits: 0,
+            misses: 0,
+            lastResetTime: Date.now()
+        };
     }
 
     async putCached(key, value) {

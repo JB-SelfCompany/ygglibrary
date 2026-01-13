@@ -7,12 +7,15 @@ const log = new (require('../core/AppLogger'))().log;//singleton
 const utils = require('../core/utils');
 
 const cleanPeriod = 1*60*1000;//1 минута
-const closeSocketOnIdle = 5*60*1000;//5 минут
+const closeSocketOnIdleDefault = 5*60*1000;//5 минут
+const closeSocketOnIdleYggdrasil = 10*60*1000;//10 минут для Yggdrasil
 
 class WebSocketController {
     constructor(wss, webAccess, config) {
         this.config = config;
         this.isDevelopment = (config.branch == 'development');
+        // Увеличенный таймаут для Yggdrasil сетей с высокой задержкой
+        this.closeSocketOnIdle = config.yggdrasil ? closeSocketOnIdleYggdrasil : closeSocketOnIdleDefault;
 
         this.webAccess = webAccess;
 
@@ -41,7 +44,7 @@ class WebSocketController {
 
                 //почистим ws-клиентов
                 this.wss.clients.forEach((ws) => {
-                    if (!ws.lastActivity || now - ws.lastActivity > closeSocketOnIdle - 50) {
+                    if (!ws.lastActivity || now - ws.lastActivity > this.closeSocketOnIdle - 50) {
                         ws.terminate();
                     }
                 });
@@ -105,6 +108,10 @@ class WebSocketController {
 
                 case 'get-inpx-file':
                     await this.getInpxFile(req, ws); break;
+                case 'get-db-info':
+                    await this.getDbInfo(req, ws); break;
+                case 'get-db-archive':
+                    await this.getDbArchive(req, ws); break;
 
                 default:
                     throw new Error(`Action not found: ${req.action}`);
@@ -229,6 +236,28 @@ class WebSocketController {
         const result = await this.webWorker.getInpxFile(req);
 
         this.send(result, req, ws);
+    }
+
+    async getDbInfo(req, ws) {
+        if (!this.config.allowRemoteLib)
+            throw new Error('Remote lib access disabled');
+
+        const result = await this.webWorker.getDbInfo();
+
+        this.send(result, req, ws);
+    }
+
+    async getDbArchive(req, ws) {
+        if (!this.config.allowRemoteLib)
+            throw new Error('Remote lib access disabled');
+
+        // Генерируем одноразовый токен для скачивания
+        const token = await this.webWorker.generateDbDownloadToken();
+
+        // Формируем ссылку для скачивания
+        const link = `/db-download/${token}`;
+
+        this.send({link}, req, ws);
     }
 
 }
